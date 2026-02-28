@@ -28,6 +28,11 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## Important: avoid the ScriptRunContext warning
+- Run the dashboard using exactly: `streamlit run app.py`
+- Do **not** run `python app.py`.
+- Do **not** run `streamlit run` without a target file, otherwise Streamlit looks for `streamlit_app.py` by default.
+
 ## Environment Variables
 - `MODEL_PATH` (default: `yolo26n.pt`)
 - `CAMERA_SOURCE` (default: `0`)

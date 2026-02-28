@@ -18,6 +18,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from ultralytics import YOLO
 
+try:
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+except Exception:  # pragma: no cover
+    def get_script_run_ctx() -> Any:  # type: ignore
+        return None
+
+
 MODEL_PATH = os.getenv("MODEL_PATH", "yolo26n.pt")
 CAMERA_SOURCE = int(os.getenv("CAMERA_SOURCE", "0"))
 CONF_THRESHOLD = float(os.getenv("CONF_THRESHOLD", "0.25"))
@@ -61,6 +68,7 @@ class ProductionState:
         self.last_frame: np.ndarray | None = None
         self.today_file = OUTPUT_DIR / f"{datetime.now().strftime('%Y-%m-%d')}.xlsx"
         self.last_save_time = 0.0
+        self.cap: cv2.VideoCapture | None = None
 
     @property
     def total_parts(self) -> int:
@@ -97,9 +105,19 @@ class ProductionState:
         self.last_save_time = now
 
 
-if "prod_state" not in st.session_state:
-    st.session_state.prod_state = ProductionState()
-state: ProductionState = st.session_state.prod_state
+GLOBAL_STATE = ProductionState()
+
+
+def in_streamlit_runtime() -> bool:
+    return get_script_run_ctx() is not None
+
+
+def get_state() -> ProductionState:
+    if in_streamlit_runtime():
+        if "prod_state" not in st.session_state:
+            st.session_state.prod_state = ProductionState()
+        return st.session_state.prod_state
+    return GLOBAL_STATE
 
 
 class Snapshot(BaseModel):
@@ -117,6 +135,7 @@ api = FastAPI(title="Conveyor Live Data API")
 
 @api.get("/api/live")
 def live_data() -> JSONResponse:
+    state = get_state()
     snap = Snapshot(
         timestamp=datetime.now().isoformat(),
         total_parts=state.total_parts,
@@ -150,14 +169,14 @@ def ensure_api_started() -> None:
         st.session_state.api_started = True
 
 
-def get_camera() -> cv2.VideoCapture:
-    if "cap" not in st.session_state or st.session_state.cap is None:
-        st.session_state.cap = cv2.VideoCapture(CAMERA_SOURCE)
-        st.session_state.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    return st.session_state.cap
+def get_camera(state: ProductionState) -> cv2.VideoCapture:
+    if state.cap is None:
+        state.cap = cv2.VideoCapture(CAMERA_SOURCE)
+        state.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    return state.cap
 
 
-def process_video_frame(frame: np.ndarray, model: YOLO, line_x: int) -> np.ndarray:
+def process_video_frame(frame: np.ndarray, model: YOLO, line_x: int, state: ProductionState) -> np.ndarray:
     state.current_counts = defaultdict(int)
     results = model.track(frame, persist=True, tracker="bytetrack.yaml", conf=CONF_THRESHOLD, verbose=False)
     for res in results:
@@ -166,7 +185,6 @@ def process_video_frame(frame: np.ndarray, model: YOLO, line_x: int) -> np.ndarr
             continue
 
         xyxy_arr = boxes.xyxy.cpu().numpy()
-        confs = boxes.conf.cpu().numpy()
         cls_ids = boxes.cls.cpu().numpy()
         ids = boxes.id.cpu().numpy()
 
@@ -246,13 +264,14 @@ def apply_theme() -> None:
     )
 
 
-def update_downtime_state() -> None:
+def update_downtime_state(state: ProductionState) -> None:
     idle_seconds = (datetime.now() - state.last_crossing_time).total_seconds()
     if idle_seconds > STOP_TIMEOUT_SECONDS and state.active_downtime is None:
         state.active_downtime = DowntimeEvent(start_time=state.last_crossing_time + timedelta(seconds=STOP_TIMEOUT_SECONDS))
 
 
 def main() -> None:
+    state = get_state()
     st.set_page_config(page_title="F1 Conveyor Command Center", layout="wide")
     apply_theme()
 
@@ -266,7 +285,7 @@ def main() -> None:
         if st.button("▶ Start detection", use_container_width=True):
             with st.spinner("Loading YOLO model + camera..."):
                 get_model()
-                get_camera()
+                get_camera(state)
             state.running = True
     with c2:
         if st.button("⏸ Stop detection", use_container_width=True):
@@ -307,12 +326,12 @@ def main() -> None:
 
     if state.running:
         model = get_model()
-        cap = get_camera()
+        cap = get_camera(state)
         ret, frame = cap.read()
         if ret:
-            processed = process_video_frame(frame, model, int(frame.shape[1] * LINE_REL_X))
+            processed = process_video_frame(frame, model, int(frame.shape[1] * LINE_REL_X), state)
             state.last_frame = processed
-            update_downtime_state()
+            update_downtime_state(state)
             frame_placeholder.image(cv2.cvtColor(processed, cv2.COLOR_BGR2RGB), use_container_width=True)
         else:
             st.error("Unable to read camera frame.")
@@ -323,4 +342,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if in_streamlit_runtime():
+        main()
+    else:
+        print("Please launch the dashboard with: streamlit run app.py")
