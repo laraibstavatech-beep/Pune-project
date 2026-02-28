@@ -2,10 +2,16 @@
 
 A racing-inspired dashboard for YOLO-based conveyor part counting.
 
+## What was optimized for faster opening
+- **Lazy loading**: YOLO model and camera are loaded only when you click **Start detection**.
+- **Model cache**: model uses `st.cache_resource`, so repeated reruns are much faster.
+- **Throttled Excel writes**: workbook autosave is periodic (default every 30s) instead of every rerun.
+- **API startup only once** in a background thread.
+
 ## Features
 - Live YOLO + ByteTrack counting with line crossing logic.
 - F1-style dashboard with analog gauge-like widgets (speed + production).
-- Live camera view integrated in UI.
+- Live camera view in UI.
 - Production vs Target graph.
 - Automatic daily Excel workbook: `YYYY-MM-DD.xlsx` with:
   - `production` sheet
@@ -31,3 +37,7 @@ streamlit run app.py
 - `TARGET_PER_HOUR` (default: `900`)
 - `STOP_TIMEOUT_SECONDS` (default: `120`)
 - `OUTPUT_DIR` (default: `daily_reports`)
+- `AUTO_SAVE_SECONDS` (default: `30`)
+
+## Note for first run
+If model weights are not available locally, Ultralytics may download them on first use. This can take time depending on network and disk speed.
